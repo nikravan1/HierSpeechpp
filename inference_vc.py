@@ -91,7 +91,7 @@ def VC(a, hierspeech):
     f0[ii] = (f0[ii] - f0[ii].mean()) / f0[ii].std()
 
     y_pad = F.pad(source_audio, (40, 40), "reflect")
-    x_w2v = w2v(y_pad.cuda())
+    x_w2v = w2v(y_pad.to(device))
     x_length = torch.LongTensor([x_w2v.size(2)]).to(device)
 
     # Prompt load
@@ -112,7 +112,7 @@ def VC(a, hierspeech):
     j = t_f0 != 0
 
     f0[ii] = ((f0[ii] * t_f0[j].std()) + t_f0[j].mean()).clip(min=0)
-    denorm_f0 = torch.log(torch.FloatTensor(f0+1).cuda())
+    denorm_f0 = torch.log(torch.FloatTensor(f0+1).to(device))
     # We utilize a hop size of 320 but denoiser uses a hop size of 400 so we utilize a hop size of 1600
     ori_prompt_len = target_audio.shape[-1]
     p = (ori_prompt_len // 1600 + 1) * 1600 - ori_prompt_len
@@ -123,16 +123,16 @@ def VC(a, hierspeech):
     # If you have a memory issue during denosing the prompt, try to denoise the prompt with cpu before TTS 
     # We will have a plan to replace a memory-efficient denoiser 
     if a.denoise_ratio == 0:
-        target_audio = torch.cat([target_audio.cuda(), target_audio.cuda()], dim=0)
+        target_audio = torch.cat([target_audio.to(device), target_audio.to(device)], dim=0)
     else:
         with torch.no_grad():
-            denoised_audio = denoise(target_audio.squeeze(0).cuda(), denoiser, hps_denoiser)
-        target_audio = torch.cat([target_audio.cuda(), denoised_audio[:,:target_audio.shape[-1]]], dim=0)
+            denoised_audio = denoise(target_audio.squeeze(0).to(device), denoiser, hps_denoiser)
+        target_audio = torch.cat([target_audio.to(device), denoised_audio[:,:target_audio.shape[-1]]], dim=0)
 
     
     target_audio = target_audio[:,:ori_prompt_len]  # 20231108 We found that large size of padding decreases a performance so we remove the paddings after denosing.
 
-    trg_mel = mel_fn(target_audio.cuda())
+    trg_mel = mel_fn(target_audio.to(device))
 
     trg_length = torch.LongTensor([trg_mel.size(2)]).to(device)
     trg_length2 = torch.cat([trg_length,trg_length], dim=0)
@@ -181,33 +181,33 @@ def model_load(a):
         f_max=hps.data.mel_fmax,
         n_mels=hps.data.n_mel_channels,
         window_fn=torch.hann_window
-    ).cuda()
-    w2v = Wav2vec2().cuda()
+    ).to(device)
+    w2v = Wav2vec2().to(device)
 
     net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1,
         hps.train.segment_size // hps.data.hop_length,
-        **hps.model).cuda()
-    net_g.load_state_dict(torch.load(a.ckpt))
+        **hps.model).to(device)
+    net_g.load_state_dict(torch.load(a.ckpt,map_location=device))
     _ = net_g.eval()
 
     if a.output_sr == 48000:
         speechsr = SpeechSR48(h_sr48.data.n_mel_channels,
             h_sr48.train.segment_size // h_sr48.data.hop_length,
-            **h_sr48.model).cuda()
+            **h_sr48.model).to(device)
         utils.load_checkpoint(a.ckpt_sr48, speechsr, None)
         speechsr.eval()
        
     elif a.output_sr == 24000:
         speechsr = SpeechSR24(h_sr.data.n_mel_channels,
         h_sr.train.segment_size // h_sr.data.hop_length,
-        **h_sr.model).cuda()
+        **h_sr.model).to(device)
         utils.load_checkpoint(a.ckpt_sr, speechsr, None)
         speechsr.eval()
       
     else:
         speechsr = None
     
-    denoiser = MPNet(hps_denoiser).cuda()
+    denoiser = MPNet(hps_denoiser).to(device)
     state_dict = load_checkpoint(a.denoiser_ckpt, device)
     denoiser.load_state_dict(state_dict['generator'])
     denoiser.eval()
